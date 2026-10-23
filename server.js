@@ -61,11 +61,30 @@ function sendToGoogleSheets(payload) {
     });
 }
 
+async function restoreSessionFromSheet(authPath) {
+    const credsFile = path.join(authPath, 'creds.json');
+    if (fs.existsSync(credsFile)) return true;
+
+    try {
+        console.log('Descargando sesión permanente desde Google Sheets...');
+        const res = await sendToGoogleSheets({ action: 'get_auth' });
+        const parsed = JSON.parse(res);
+        if (parsed.found && parsed.data) {
+            if (!fs.existsSync(authPath)) fs.mkdirSync(authPath, { recursive: true });
+            fs.writeFileSync(credsFile, parsed.data, 'utf8');
+            console.log('✅ Sesión de WhatsApp restaurada exitosamente desde Google Sheets!');
+            return true;
+        }
+    } catch (e) {
+        console.error('No se pudo restaurar sesión desde Google Sheets:', e.message);
+    }
+    return false;
+}
+
 function classifyAndParse(text, senderName) {
     const raw = text.trim();
     const lower = normalize(raw);
 
-    // Filter out chatter immediately
     if (/^(hola|buenas|buen dia|buenas tardes|oki|ok|okaa|joya|gracias|listo|dale|si|no|👍|jaja|genial)$/i.test(lower)) {
         return null;
     }
@@ -74,7 +93,7 @@ function classifyAndParse(text, senderName) {
     const hasIphone = /\b(iphone|iph|1[1-8]\s*(?:pro|max|plus|mini)?|xr|xs)\b/i.test(lower);
     const hasImei = /\b\d{14,15}\b/.test(raw);
 
-    // 1. Ingresos de Stock / Compras de equipos
+    // 1. Ingresos de Stock
     if (lower.includes('deja') && (hasIphone || hasImei)) {
         let costo = 0;
         const matchCosto = raw.match(/u\$?\s*([0-9.,]+)/i) || raw.match(/([0-9.,]+)\s*usd/i);
@@ -128,7 +147,7 @@ function classifyAndParse(text, senderName) {
         };
     }
 
-    // 3. Ventas / Entregas de celulares
+    // 3. Ventas / Entregas
     const isVentaDirecta = (lower.includes('vendido') || lower.includes('venta') || lower.includes('entrego a') || lower.includes('comprado a')) && (hasIphone || hasAmount || hasImei);
     const isReservaGremio = lower.includes('gremio') && hasIphone;
 
@@ -182,6 +201,8 @@ function classifyAndParse(text, senderName) {
 
 async function startWhatsApp() {
     const authPath = path.join(process.cwd(), 'auth_info');
+    await restoreSessionFromSheet(authPath);
+
     const { state, saveCreds } = await useMultiFileAuthState(authPath);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -190,10 +211,19 @@ async function startWhatsApp() {
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
         auth: state,
-        browser: ['Movil Zone Bot', 'Chrome', '1.0.0']
+        browser: ['Control Ventas Celulares', 'Chrome', '1.0.0']
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', async () => {
+        saveCreds();
+        try {
+            const credsFile = path.join(authPath, 'creds.json');
+            if (fs.existsSync(credsFile)) {
+                const credsRaw = fs.readFileSync(credsFile, 'utf8');
+                await sendToGoogleSheets({ action: 'save_auth', payload: credsRaw });
+            }
+        } catch (e) {}
+    });
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
@@ -206,12 +236,12 @@ async function startWhatsApp() {
         if (connection === 'open') {
             isConnected = true;
             currentQRDataUrl = null;
-            console.log('>>> CONECTADO CON ÉXITO A WHATSAPP <<<');
+            console.log('>>> CONECTADO CON ÉXITO A WHATSAPP (SIN QR) <<<');
         } else if (connection === 'close') {
             isConnected = false;
             const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
-                setTimeout(startWhatsApp, 3000);
+                setTimeout(startWhatsApp, 4000);
             }
         }
     });
@@ -275,8 +305,8 @@ app.get('/qr', (req, res) => {
     if (isConnected) {
         return res.send(`
             <html><body style="font-family:sans-serif;text-align:center;padding:50px;">
-                <h1 style="color:#25D366;">🟢 WhatsApp ya está conectado</h1>
-                <p>No se requiere escanear QR. El bot está escuchando el grupo.</p>
+                <h1 style="color:#25D366;">🟢 WhatsApp ya está conectado automáticamente</h1>
+                <p>La sesión fue cargada desde tu Google Sheets. El bot está escuchando el grupo.</p>
                 <a href="/">Volver al panel</a>
             </body></html>
         `);
@@ -284,8 +314,8 @@ app.get('/qr', (req, res) => {
     if (!currentQRDataUrl) {
         return res.send(`
             <html><body style="font-family:sans-serif;text-align:center;padding:50px;">
-                <h1>Generando código QR...</h1>
-                <p>Por favor recargá en 3 segundos.</p>
+                <h1>Cargando sesión desde Google Sheets...</h1>
+                <p>Por favor aguardá unos segundos.</p>
                 <script>setTimeout(() => location.reload(), 3000);</script>
             </body></html>
         `);
@@ -305,7 +335,7 @@ app.get('/qr', (req, res) => {
 
 app.get('/', (req, res) => {
     const statusColor = isConnected ? '#25D366' : '#FF9900';
-    const statusText = isConnected ? '🟢 ACTIVO Y ESCUCHANDO 24/7' : '🟡 ESPERANDO ESCANEO DE QR';
+    const statusText = isConnected ? '🟢 ACTIVO Y ESCUCHANDO 24/7' : '🟡 RECONECTANDO CON GOOGLE SHEETS';
     
     let rowsHtml = recentEvents.map(e => `
         <tr style="border-bottom:1px solid #eee;">
@@ -346,7 +376,6 @@ app.get('/', (req, res) => {
                     </div>
                     <div style="text-align:right;">
                         <span class="badge" style="background:${statusColor};">${statusText}</span>
-                        ${!isConnected ? '<div style="margin-top:8px;"><a href="/qr" style="background:#075E54;color:white;text-decoration:none;padding:6px 14px;border-radius:6px;font-size:13px;font-weight:bold;">📲 Ver QR para Escanear</a></div>' : ''}
                     </div>
                 </div>
 
