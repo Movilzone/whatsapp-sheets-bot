@@ -21,6 +21,24 @@ const TARGET_JID = '120363218784172812@g.us';
 let currentQRDataUrl = null;
 let isConnected = false;
 let recentEvents = [];
+let logBuffer = [];
+let sock = null;
+
+// Intercept logs for remote inspection via /logs
+const origLog = console.log;
+const origErr = console.error;
+console.log = (...args) => {
+    const line = args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ');
+    logBuffer.push(`[${new Date().toLocaleTimeString('es-AR')}] ${line}`);
+    if (logBuffer.length > 80) logBuffer.shift();
+    origLog(...args);
+};
+console.error = (...args) => {
+    const line = args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ');
+    logBuffer.push(`[${new Date().toLocaleTimeString('es-AR')}] ❌ ${line}`);
+    if (logBuffer.length > 80) logBuffer.shift();
+    origErr(...args);
+};
 
 function normalize(str) {
     return (str || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
@@ -200,13 +218,22 @@ function classifyAndParse(text, senderName) {
 }
 
 async function startWhatsApp() {
+    // Clean up any existing socket cleanly before reconnecting
+    if (sock) {
+        try {
+            sock.ev.removeAllListeners();
+            sock.end(undefined);
+        } catch (e) {}
+        sock = null;
+    }
+
     const authPath = path.join(process.cwd(), 'auth_info');
     await restoreSessionFromSheet(authPath);
 
     const { state, saveCreds } = await useMultiFileAuthState(authPath);
     const { version } = await fetchLatestBaileysVersion();
 
-    const sock = makeWASocket({
+    sock = makeWASocket({
         version,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
@@ -215,7 +242,7 @@ async function startWhatsApp() {
     });
 
     sock.ev.on('creds.update', async () => {
-        saveCreds();
+        await saveCreds();
         try {
             const credsFile = path.join(authPath, 'creds.json');
             if (fs.existsSync(credsFile)) {
@@ -239,9 +266,16 @@ async function startWhatsApp() {
             console.log('>>> CONECTADO CON ÉXITO A WHATSAPP (SIN QR) <<<');
         } else if (connection === 'close') {
             isConnected = false;
-            const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+            const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+            console.log('Conexión cerrada, statusCode:', statusCode);
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
-                setTimeout(startWhatsApp, 4000);
+                console.log('Reintentando reconexión en 5 segundos...');
+                setTimeout(startWhatsApp, 5000);
+            } else {
+                console.log('Sesión cerrada permanentemente (Logged Out). Limpiando auth...');
+                try { fs.rmSync(authPath, { recursive: true, force: true }); } catch (e) {}
+                setTimeout(startWhatsApp, 3000);
             }
         }
     });
@@ -294,11 +328,16 @@ async function startWhatsApp() {
     });
 }
 
-// Servidor Web para Render (Dashboard + QR + Keepalive)
+// Servidor Web para Render (Dashboard + Logs + QR + Keepalive)
 app.use(express.json());
 
 app.get('/ping', (req, res) => {
     res.status(200).send('pong');
+});
+
+app.get('/logs', (req, res) => {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.send(logBuffer.join('\n') || 'Aguardando logs...');
 });
 
 app.get('/qr', (req, res) => {
