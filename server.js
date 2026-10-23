@@ -1,10 +1,16 @@
 import express from 'express';
-import makeWASocket, { DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import * as BaileysPkg from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
 import https from 'https';
+
+const baileys = BaileysPkg.default || BaileysPkg;
+const makeWASocket = typeof baileys === 'function' ? baileys : (baileys.default || BaileysPkg.makeWASocket || baileys.makeWASocket);
+const DisconnectReason = baileys.DisconnectReason || BaileysPkg.DisconnectReason;
+const useMultiFileAuthState = baileys.useMultiFileAuthState || BaileysPkg.useMultiFileAuthState;
+const fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion || BaileysPkg.fetchLatestBaileysVersion;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
