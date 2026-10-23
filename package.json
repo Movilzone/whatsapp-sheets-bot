@@ -1,0 +1,19 @@
+{
+  "name": "whatsapp-sheets-bot",
+  "version": "1.0.0",
+  "description": "Bot 24/7 de WhatsApp conectado a Google Sheets para SOLO IPHONE VENTAS",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.18",
+    "express": "^4.19.2",
+    "pino": "^9.0.0",
+    "qrcode": "^1.5.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
