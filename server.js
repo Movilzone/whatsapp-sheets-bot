@@ -139,23 +139,25 @@ function classifyAndParse(text, senderName) {
             costo = parseFloat(costoMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
         }
 
-        const noPago = lower.includes('no pago') || lower.includes('no pagó') || lower.includes('debe');
-        const estadoPago = noPago ? 'PENDIENTE' : (precioVenta > 0 ? 'PAGADO TOTAL' : 'CONSULTAR');
+        const precioNum = Number(precioVenta) || 0;
+        const costoNum = Number(costo) || 0;
+        const gananciaNum = precioNum - costoNum;
+        const cobradoNum = noPago ? 0 : precioNum;
 
         return {
             type: 'venta',
             payload: {
                 action: 'nueva_venta',
                 fecha: new Date().toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }),
-                cliente: cliente,
+                cliente: `${cliente} (${noPago ? 'DEBE' : 'PAGADO'})`,
                 modelo: modelo || raw.substring(0, 30),
                 detalle: raw,
-                precio: precioVenta,
-                costo: costo,
-                estado_pago: estadoPago,
-                forma_pago: raw.toLowerCase().includes('tome') || raw.toLowerCase().includes('permuta') ? 'MIXTO (USD + PERMUTA)' : 'EFECTIVO USD',
-                cobrado: noPago ? 0 : precioVenta,
-                notas: raw
+                precio: precioNum,
+                costo: costoNum,
+                estado_pago: costoNum,     // Maps to Col I (sums to Costo Total in Resumen Diario)
+                forma_pago: precioNum,     // Maps to Col J (sums to Ventas Totales in Resumen Diario)
+                cobrado: cobradoNum,       // Maps to Col K (Cobrado)
+                notas: gananciaNum         // Maps to Col M (sums to Ganancia Neta in Resumen Diario)
             }
         };
     }
