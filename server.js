@@ -24,7 +24,6 @@ let recentEvents = [];
 let logBuffer = [];
 let sock = null;
 
-// Intercept logs for remote inspection via /logs
 const origLog = console.log;
 const origErr = console.error;
 console.log = (...args) => {
@@ -107,11 +106,61 @@ function classifyAndParse(text, senderName) {
         return null;
     }
 
-    const hasAmount = /u\$?\s*\d+/i.test(raw) || /\d+\s*usd/i.test(raw) || /\$\s*[\d.]+/i.test(raw);
+    const hasAmount = /u\$?\s*\d+/i.test(raw) || /\d+\s*usd/i.test(raw) || /\$\s*[\d.]+/i.test(raw) || /\b\d{3,4}\b/.test(raw);
     const hasIphone = /\b(iphone|iph|1[1-8]\s*(?:pro|max|plus|mini)?|xr|xs)\b/i.test(lower);
     const hasImei = /\b\d{14,15}\b/.test(raw);
 
-    // 1. Ingresos de Stock
+    // 1. VENTAS / ENTREGAS (Prioridad 1: si dice "vendí", "vendido", "venta")
+    const isVentaDirecta = (lower.includes('vendi') || lower.includes('vendido') || lower.includes('venta') || lower.includes('entrego a')) && (hasIphone || hasAmount || hasImei);
+    const isReservaGremio = lower.includes('gremio') && hasIphone;
+
+    if (isVentaDirecta || isReservaGremio) {
+        let modelo = '';
+        const iphMatch = raw.match(/((?:iph(?:one)?|1[1-8])\s*(?:pro|plus|max|mini)?(?:\s*\d{2,3}gb)?(?:\s*[a-z]+)?)/i);
+        if (iphMatch) modelo = iphMatch[1].trim();
+
+        let precioVenta = 0;
+        const vtaMatch = raw.match(/vendi\w*\s+(?:el\s+)?([a-zA-Z0-9\s]+?)\s+(\d{3,4})/i) ||
+                         raw.match(/vendido\s*a\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)(?:\s*en)?\s*u?\$?\s*([0-9.,]+)/i) ||
+                         raw.match(/u?\$?\s*([0-9.,]+)/i);
+        
+        let cliente = senderName || 'Cliente Final';
+        if (vtaMatch && vtaMatch.length >= 3) {
+            precioVenta = parseFloat(vtaMatch[2].replace(/\./g, '').replace(',', '.')) || 0;
+        } else if (vtaMatch) {
+            precioVenta = parseFloat(vtaMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
+        }
+
+        let costo = 0;
+        const costoMatch = raw.match(/pague\s+(\d{3,4})\s+a\s+([a-zA-Z]+)/i) ||
+                           raw.match(/comprado\s*a\s*[a-zA-ZáéíóúñÑ]+\s*u?\$?\s*([0-9.,]+)/i) ||
+                           raw.match(/costo\s*u?\$?\s*([0-9.,]+)/i);
+        if (costoMatch) {
+            costo = parseFloat(costoMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
+        }
+
+        const noPago = lower.includes('no pago') || lower.includes('no pagó') || lower.includes('debe');
+        const estadoPago = noPago ? 'PENDIENTE' : (precioVenta > 0 ? 'PAGADO TOTAL' : 'CONSULTAR');
+
+        return {
+            type: 'venta',
+            payload: {
+                action: 'nueva_venta',
+                fecha: new Date().toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }),
+                cliente: cliente,
+                modelo: modelo || raw.substring(0, 30),
+                detalle: raw,
+                precio: precioVenta,
+                costo: costo,
+                estado_pago: estadoPago,
+                forma_pago: raw.toLowerCase().includes('tome') || raw.toLowerCase().includes('permuta') ? 'MIXTO (USD + PERMUTA)' : 'EFECTIVO USD',
+                cobrado: noPago ? 0 : precioVenta,
+                notas: raw
+            }
+        };
+    }
+
+    // 2. Ingresos de Stock
     if (lower.includes('deja') && (hasIphone || hasImei)) {
         let costo = 0;
         const matchCosto = raw.match(/u\$?\s*([0-9.,]+)/i) || raw.match(/([0-9.,]+)\s*usd/i);
@@ -133,7 +182,7 @@ function classifyAndParse(text, senderName) {
         };
     }
 
-    // 2. Cobros / Pagos de clientes
+    // 3. Cobros / Pagos de clientes
     const isCobro = (lower.startsWith('pago ') || lower.includes(' pago ') || lower.includes('pago*') || (lower.includes('retira') && lower.includes('pago'))) && hasAmount;
     if (isCobro) {
         let montoUsd = 0;
@@ -165,60 +214,10 @@ function classifyAndParse(text, senderName) {
         };
     }
 
-    // 3. Ventas / Entregas
-    const isVentaDirecta = (lower.includes('vendido') || lower.includes('venta') || lower.includes('entrego a') || lower.includes('comprado a')) && (hasIphone || hasAmount || hasImei);
-    const isReservaGremio = lower.includes('gremio') && hasIphone;
-
-    if (isVentaDirecta || isReservaGremio) {
-        let modelo = '';
-        const iphMatch = raw.match(/((?:iph(?:one)?|1[1-8])\s*(?:pro|plus|max|mini)?(?:\s*\d{2,3}gb)?(?:\s*[a-z]+)?)/i);
-        if (iphMatch) modelo = iphMatch[1].trim();
-
-        let precioVenta = 0;
-        const vtaMatch = raw.match(/vendido\s*a\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)(?:\s*en)?\s*u?\$?\s*([0-9.,]+)/i) ||
-                         raw.match(/u?\$?\s*([0-9.,]+)/i);
-        let cliente = 'Cliente';
-        if (vtaMatch && vtaMatch.length >= 3) {
-            cliente = vtaMatch[1].trim();
-            precioVenta = parseFloat(vtaMatch[2].replace(/\./g, '').replace(',', '.')) || 0;
-        } else if (vtaMatch) {
-            precioVenta = parseFloat(vtaMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
-        }
-
-        const clienteMatch = raw.match(/(?:a|cliente|entrego a)\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?)/i) ||
-                             raw.match(/^([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?)\s+gremio/i);
-        if (clienteMatch) cliente = clienteMatch[1].trim();
-
-        let costo = 0;
-        const costoMatch = raw.match(/comprado\s*a\s*[a-zA-ZáéíóúñÑ]+\s*u?\$?\s*([0-9.,]+)/i) ||
-                           raw.match(/costo\s*u?\$?\s*([0-9.,]+)/i);
-        if (costoMatch) costo = parseFloat(costoMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
-
-        const noPago = lower.includes('no pago') || lower.includes('no pagó') || lower.includes('debe');
-        const estadoPago = noPago ? 'PENDIENTE' : (precioVenta > 0 ? 'PAGADO TOTAL' : 'CONSULTAR');
-
-        return {
-            type: 'venta',
-            payload: {
-                action: 'nueva_venta',
-                cliente: cliente,
-                modelo: modelo || raw.substring(0, 30),
-                detalle: raw,
-                precio: precioVenta,
-                costo: costo,
-                estado_pago: estadoPago,
-                forma_pago: 'EFECTIVO USD',
-                cobrado: noPago ? 0 : precioVenta,
-                notas: `WhatsApp: ${raw}`
-            }
-        };
-    }
-
     return null;
 }
 
 async function startWhatsApp() {
-    // Clean up any existing socket cleanly before reconnecting
     if (sock) {
         try {
             sock.ev.removeAllListeners();
