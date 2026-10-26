@@ -139,25 +139,57 @@ function classifyAndParse(text, senderName) {
             costo = parseFloat(costoMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
         }
 
+        const noPago = lower.includes('no pago') || lower.includes('no pagó') || lower.includes('debe');
         const precioNum = Number(precioVenta) || 0;
         const costoNum = Number(costo) || 0;
         const gananciaNum = precioNum - costoNum;
         const cobradoNum = noPago ? 0 : precioNum;
+        const estadoCobro = noPago ? 'DEBE' : (precioNum > 0 ? 'PAGADO' : 'CONSULTAR');
+
+        const imeiMatch = raw.match(/\b\d{14,15}\b/);
+        const imei = imeiMatch ? imeiMatch[0] : '-';
+
+        let formaPago = 'EFECTIVO USD';
+        if (raw.toLowerCase().includes('tome') || raw.toLowerCase().includes('permuta')) {
+            formaPago = 'MIXTO (USD + PERMUTA)';
+        } else if (raw.toLowerCase().includes('peso') || raw.includes('$')) {
+            formaPago = 'PESOS ARS / TRANSFERENCIA';
+        } else if (raw.toLowerCase().includes('transferencia') || raw.toLowerCase().includes('transf')) {
+            formaPago = 'TRANSFERENCIA';
+        }
+
+        // Detectar si tomó permuta para registrar en STOCK automáticamente
+        let permutaObj = null;
+        if (lower.includes('tome') || lower.includes('permuta')) {
+            const permMatch = raw.match(/tome\s+(?:un\s+)?([a-zA-Z0-9\s%]+?)(?:\s+en|\s+u\$|\s+\$)/i);
+            const permPrice = raw.match(/(?:tome.*?en\s*u?\$?\s*|permuta.*?u?\$?\s*)([0-9.,]+)/i);
+            permutaObj = {
+                modelo: permMatch ? permMatch[1].trim() : 'iPhone Usado',
+                costo: permPrice ? parseFloat(permPrice[1].replace(/\./g, '').replace(',', '.')) : 0,
+                imei: imei
+            };
+        }
 
         return {
             type: 'venta',
             payload: {
                 action: 'nueva_venta',
                 fecha: new Date().toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }),
-                cliente: `${cliente} (${noPago ? 'DEBE' : 'PAGADO'})`,
+                vendedor: senderName || 'Apple Zone',
+                cliente: 'Cliente Final',
                 modelo: modelo || raw.substring(0, 30),
-                detalle: raw,
-                precio: precioNum,
+                detalles: raw,
+                imei: imei,
                 costo: costoNum,
-                estado_pago: costoNum,     // Maps to Col I (sums to Costo Total in Resumen Diario)
-                forma_pago: precioNum,     // Maps to Col J (sums to Ventas Totales in Resumen Diario)
-                cobrado: cobradoNum,       // Maps to Col K (Cobrado)
-                notas: gananciaNum         // Maps to Col M (sums to Ganancia Neta in Resumen Diario)
+                precio: precioNum,
+                comision: 0,
+                forma_pago: formaPago,
+                cobrado: cobradoNum,
+                estado_cobro: estadoCobro,
+                permuta: permutaObj,
+                // Retrocompatibilidad
+                estado_pago: costoNum,
+                notas: gananciaNum
             }
         };
     }
