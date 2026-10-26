@@ -120,38 +120,52 @@ function classifyAndParse(text, senderName) {
     const isReservaGremio = lower.includes('gremio') && hasIphone;
 
     if (isVentaDirecta || isReservaGremio) {
-        let modelo = '';
-        const iphMatch = raw.match(/((?:iph(?:one)?|1[1-8])\s*(?:pro|plus|max|mini)?(?:\s*\d{2,3}\s*gb)?(?:\s*[a-z]+)?)/i);
-        if (iphMatch) modelo = iphMatch[1].trim();
+        // 1. Extraer VENDEDOR explícito (ej: "vendedor ema", "vendido por ivan")
+        let vendedor = senderName || 'Apple Zone';
+        const vendMatch = raw.match(/vendedor\s*[:=]?\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)/i) ||
+                          raw.match(/vendido\s+por\s+([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)/i);
+        if (vendMatch) {
+            vendedor = vendMatch[1].trim().toUpperCase();
+        }
 
-        let precioVenta = 0;
-        const vtaMatch = raw.match(/(?:vendi\w*|vnta|vta|venta)\s+(?:el\s+)?([a-zA-Z0-9\s]+?)\s+(?:u\$?|\$)?\s*(\d{3,4})/i) ||
-                         raw.match(/vendido\s*a\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)(?:\s*en)?\s*u?\$?\s*([0-9.,]+)/i) ||
-                         raw.match(/u\$?\s*([0-9.,]+)/i);
-        
+        // 2. Extraer CLIENTE explícito (ej: "cliente MANU", "vendido a MANU")
         let cliente = 'Cliente Final';
-        const clienteMatch = raw.match(/cliente\s+([a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+stock|\s+imei|\s+paga|$)/i);
-        if (clienteMatch) {
-            cliente = clienteMatch[1].trim();
-        } else if (senderName) {
-            cliente = senderName;
+        const cliMatch = raw.match(/cliente\s*[:=]?\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+precio|\s+costo|\s+imei|\s+stock|\s+paga|\s+no pago|\n|$)/i) ||
+                         raw.match(/vendido\s+a\s+([a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+en|\s+por|\s+u\$|\s+\$|\n|$)/i);
+        if (cliMatch) {
+            cliente = cliMatch[1].trim();
         }
 
-        if (vtaMatch && vtaMatch.length >= 3) {
-            precioVenta = parseFloat(vtaMatch[2].replace(/\./g, '').replace(',', '.')) || 0;
-        } else if (vtaMatch) {
-            precioVenta = parseFloat(vtaMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
+        // 3. Extraer PRECIO DE VENTA explícito (evitando confundir con modelo como "14")
+        let precioVenta = 0;
+        const precioMatch = raw.match(/precio\s*[:=]?\s*u?\$?\s*([0-9.,]+)/i) ||
+                            raw.match(/u\$?\s*([0-9]{3,4})(?!\s*gb)/i) ||
+                            raw.match(/([0-9]{3,4})\s*(?:usd|dolares|dólares)/i);
+        if (precioMatch) {
+            precioVenta = parseFloat(precioMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
         }
 
+        // 4. Extraer MODELO
+        let modelo = '';
+        const modMatch = raw.match(/(?:venta|vendi\w*|vta|vnta)\s+(?:el\s+)?((?:iphone|iph|samsung|s\d{2}|redmi|moto|xiaomi)?[a-zA-Z0-9\s]+?)(?:\s+vendedor|\s+cliente|\s+precio|\s+costo|\s+imei|\s+stock|\s+paga|\s+no pago|\n|$)/i);
+        if (modMatch && modMatch[1].trim().length > 3) {
+            modelo = modMatch[1].trim().toUpperCase();
+        } else {
+            const iphMatch = raw.match(/((?:iph(?:one)?|1[1-8]|s\d{2})[\w\s]*(?:pro|plus|max|ultra)?(?:\s*\d{2,3}\s*gb)?(?:\s*[a-z]+)?)/i);
+            if (iphMatch) modelo = iphMatch[1].trim().toUpperCase();
+        }
+
+        // 5. Extraer COSTO si viene
         let costo = 0;
         const costoMatch = raw.match(/pague\s+(\d{3,4})\s+a\s+([a-zA-Z]+)/i) ||
                            raw.match(/comprado\s*a\s*[a-zA-ZáéíóúñÑ]+\s*u?\$?\s*([0-9.,]+)/i) ||
-                           raw.match(/costo\s*u?\$?\s*([0-9.,]+)/i);
+                           raw.match(/costo\s*[:=]?\s*u?\$?\s*([0-9.,]+)/i);
         if (costoMatch) {
             costo = parseFloat(costoMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
         }
 
-        const noPago = lower.includes('no pago') || lower.includes('no pagó') || lower.includes('debe');
+        // 6. Detectar ESTADO DE COBRO (No pago / debe / fiado)
+        const noPago = lower.includes('no pago') || lower.includes('no pagó') || lower.includes('debe') || lower.includes('fiado') || lower.includes('cuenta corriente');
         const precioNum = Number(precioVenta) || 0;
         const costoNum = Number(costo) || 0;
         const gananciaNum = precioNum - costoNum;
@@ -161,7 +175,7 @@ function classifyAndParse(text, senderName) {
         const imeiMatch = raw.match(/\b\d{14,15}\b/);
         const imei = imeiMatch ? imeiMatch[0] : '-';
 
-        let formaPago = 'EFECTIVO USD';
+        let formaPago = noPago ? 'Fiado / Cuenta Corriente (No pagó)' : 'EFECTIVO USD';
         if (raw.toLowerCase().includes('tome') || raw.toLowerCase().includes('permuta')) {
             formaPago = 'MIXTO (USD + PERMUTA)';
         } else if (raw.toLowerCase().includes('peso') || raw.includes('$')) {
@@ -187,8 +201,8 @@ function classifyAndParse(text, senderName) {
             payload: {
                 action: 'nueva_venta',
                 fecha: new Date().toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }),
-                vendedor: senderName || 'Apple Zone',
-                cliente: 'Cliente Final',
+                vendedor: vendedor,
+                cliente: cliente,
                 modelo: modelo || raw.substring(0, 30),
                 detalles: raw,
                 imei: imei,
