@@ -110,21 +110,33 @@ function classifyAndParse(text, senderName) {
     const hasIphone = /\b(iphone|iph|1[1-8]\s*(?:pro|max|plus|mini)?|xr|xs)\b/i.test(lower);
     const hasImei = /\b\d{14,15}\b/.test(raw);
 
-    // 1. VENTAS / ENTREGAS (Prioridad 1: si dice "vendí", "vendido", "venta")
-    const isVentaDirecta = (lower.includes('vendi') || lower.includes('vendido') || lower.includes('venta') || lower.includes('entrego a')) && (hasIphone || hasAmount || hasImei);
+    // 1. VENTAS / ENTREGAS (Prioridad 1: si dice "vendí", "vendido", "venta", "vta", "vnta", "entrega", etc.)
+    const isVentaDirecta = (
+        lower.includes('vendi') || lower.includes('vendido') || lower.includes('vendio') || lower.includes('vendieron') ||
+        lower.includes('venta') || lower.includes('vnta') || lower.includes('vta') ||
+        lower.includes('entrego') || lower.includes('entrega') || lower.includes('entregado') ||
+        lower.includes('stock propio')
+    ) && (hasIphone || hasAmount || hasImei);
     const isReservaGremio = lower.includes('gremio') && hasIphone;
 
     if (isVentaDirecta || isReservaGremio) {
         let modelo = '';
-        const iphMatch = raw.match(/((?:iph(?:one)?|1[1-8])\s*(?:pro|plus|max|mini)?(?:\s*\d{2,3}gb)?(?:\s*[a-z]+)?)/i);
+        const iphMatch = raw.match(/((?:iph(?:one)?|1[1-8])\s*(?:pro|plus|max|mini)?(?:\s*\d{2,3}\s*gb)?(?:\s*[a-z]+)?)/i);
         if (iphMatch) modelo = iphMatch[1].trim();
 
         let precioVenta = 0;
-        const vtaMatch = raw.match(/vendi\w*\s+(?:el\s+)?([a-zA-Z0-9\s]+?)\s+(\d{3,4})/i) ||
+        const vtaMatch = raw.match(/(?:vendi\w*|vnta|vta|venta)\s+(?:el\s+)?([a-zA-Z0-9\s]+?)\s+(?:u\$?|\$)?\s*(\d{3,4})/i) ||
                          raw.match(/vendido\s*a\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)(?:\s*en)?\s*u?\$?\s*([0-9.,]+)/i) ||
-                         raw.match(/u?\$?\s*([0-9.,]+)/i);
+                         raw.match(/u\$?\s*([0-9.,]+)/i);
         
-        let cliente = senderName || 'Cliente Final';
+        let cliente = 'Cliente Final';
+        const clienteMatch = raw.match(/cliente\s+([a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+stock|\s+imei|\s+paga|$)/i);
+        if (clienteMatch) {
+            cliente = clienteMatch[1].trim();
+        } else if (senderName) {
+            cliente = senderName;
+        }
+
         if (vtaMatch && vtaMatch.length >= 3) {
             precioVenta = parseFloat(vtaMatch[2].replace(/\./g, '').replace(',', '.')) || 0;
         } else if (vtaMatch) {
