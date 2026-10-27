@@ -120,9 +120,9 @@ function classifyAndParse(text, senderName) {
     const isReservaGremio = lower.includes('gremio') && hasIphone;
 
     if (isVentaDirecta || isReservaGremio) {
-        // 1. Extraer VENDEDOR explícito (ej: "vendedor ema", "vendido por ivan")
+        // 1. Extraer VENDEDOR explícito (ej: "vendedor ema", "vendedora rocio", "vendido por ivan")
         let vendedor = senderName || 'Apple Zone';
-        const vendMatch = raw.match(/vendedor\s*[:=]?\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)/i) ||
+        const vendMatch = raw.match(/vendedor(?:a)?\s*[:=]?\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)/i) ||
                           raw.match(/vendido\s+por\s+([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)/i);
         if (vendMatch) {
             vendedor = vendMatch[1].trim().toUpperCase();
@@ -130,7 +130,7 @@ function classifyAndParse(text, senderName) {
 
         // 2. Extraer CLIENTE explícito (ej: "cliente MANU", "vendido a MANU")
         let cliente = 'Cliente Final';
-        const cliMatch = raw.match(/cliente\s*[:=]?\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+precio|\s+costo|\s+imei|\s+stock|\s+paga|\s+no pago|\n|$)/i) ||
+        const cliMatch = raw.match(/cliente\s*[:=]?\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+vendedor|\s+precio|\s+costo|\s+imei|\s+stock|\s+paga|\s+no pago|\n|$)/i) ||
                          raw.match(/vendido\s+a\s+([a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+en|\s+por|\s+u\$|\s+\$|\n|$)/i);
         if (cliMatch) {
             cliente = cliMatch[1].trim();
@@ -147,7 +147,7 @@ function classifyAndParse(text, senderName) {
 
         // 4. Extraer MODELO
         let modelo = '';
-        const modMatch = raw.match(/(?:venta|vendi\w*|vta|vnta)\s+(?:el\s+)?((?:iphone|iph|samsung|s\d{2}|redmi|moto|xiaomi)?[a-zA-Z0-9\s]+?)(?:\s+vendedor|\s+cliente|\s+precio|\s+costo|\s+imei|\s+stock|\s+paga|\s+no pago|\n|$)/i);
+        const modMatch = raw.match(/(?:venta|vendi\w*|vta|vnta)\s+(?:el\s+)?((?:iphone|iph|samsung|s\d{2}|redmi|moto|xiaomi)?[a-zA-Z0-9\s]+?)(?:\s+vendedor(?:a)?|\s+cliente|\s+precio|\s+costo|\s+imei|\s+stock|\s+paga|\s+no pago|\n|$)/i);
         if (modMatch && modMatch[1].trim().length > 3) {
             modelo = modMatch[1].trim().toUpperCase();
         } else {
