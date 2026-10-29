@@ -106,6 +106,12 @@ function classifyAndParse(text, senderName) {
         return null;
     }
 
+    // Ignorar reportes, resúmenes y cierres de caja para no duplicar ventas
+    if (lower.includes('reporte') || lower.includes('resumen') || lower.includes('cierre') || lower.includes('arqueo')) {
+        console.log('ℹ️ Mensaje ignorado por ser reporte/resumen/cierre de caja');
+        return null;
+    }
+
     const hasAmount = /u\$?\s*\d+/i.test(raw) || /\d+\s*usd/i.test(raw) || /\$\s*[\d.]+/i.test(raw) || /\b\d{3,4}\b/.test(raw);
     const hasIphone = /\b(iphone|iph|1[1-8]\s*(?:pro|max|plus|mini)?|xr|xs)\b/i.test(lower);
     const hasImei = /\b\d{14,15}\b/.test(raw);
