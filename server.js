@@ -113,14 +113,62 @@ function classifyAndParse(text, senderName) {
     }
 
     const hasAmount = /u\$?\s*\d+/i.test(raw) || /\d+\s*usd/i.test(raw) || /\$\s*[\d.]+/i.test(raw) || /\b\d{3,4}\b/.test(raw);
-    const hasIphone = /\b(iphone|iph|1[1-8]\s*(?:pro|max|plus|mini)?|xr|xs)\b/i.test(lower);
-    const hasImei = /\b\d{14,15}\b/.test(raw);
+    const hasIphone = /\b(iphone|iph|1[1-8]\s*(?:pro|max|plus|mini)?|xr|xs|ps5|playstation)\b/i.test(lower);
+    const hasImei = /\b\d{14,15}\b/.test(raw) || /serial\s*[:=]?\s*[A-Za-z0-9\-]+/i.test(raw);
+
+    // 0. Entregas de dinero / comisionista / egresos de caja (NO confundir con ventas)
+    if (lower.includes('comisionista') || (lower.includes('entrego') && lower.includes('alejo'))) {
+        let montoUsd = 0;
+        let montoArs = 0;
+        const usdMatch = raw.match(/u\$?\s*([0-9.,]+)/i) || raw.match(/([0-9.,]+)\s*usd/i);
+        if (usdMatch) montoUsd = parseFloat(usdMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
+        const arsMatch = raw.match(/(?<!u)\$\s*([0-9.,]+)/i);
+        if (arsMatch) {
+            montoArs = parseFloat(arsMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
+        }
+
+        const moneda = montoUsd > 0 ? 'USD' : 'ARS';
+        const medio = montoUsd > 0 ? 'Efectivo USD' : 'Efectivo ARS';
+        const fecha = new Date().toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
+
+        const codigo = `
+var caja = ss.getSheetByName("CAJA DIARIA");
+var next = caja.getLastRow() + 1;
+var fila = [
+  "${fecha}",
+  "EGRESO",
+  "ENTREGA DINERO / COMISIONISTA",
+  ${JSON.stringify(raw)},
+  "${moneda}",
+  ${montoUsd},
+  ${montoArs},
+  0,
+  ${montoUsd},
+  "${medio}",
+  "COMISIONISTA",
+  "Entrega de dinero"
+];
+caja.getRange(next, 1, 1, 12).setValues([fila]);
+caja.getRange(next, 2).setBackground("#f8d7da").setFontColor("#721c24").setFontWeight("bold");
+if (${montoUsd} > 0) caja.getRange(next, 6).setNumberFormat('"U$D " #,##0.00').setFontColor("#721c24").setFontWeight("bold");
+if (${montoArs} > 0) caja.getRange(next, 7).setNumberFormat('"$" #,##0').setFontColor("#721c24").setFontWeight("bold");
+caja.getRange(next, 9).setNumberFormat('"U$D " #,##0.00');
+return { status: "OK", cajaRow: next };
+`;
+        return {
+            type: 'egreso_comisionista',
+            payload: {
+                action: 'ejecutar',
+                codigo: codigo
+            }
+        };
+    }
 
     // 1. VENTAS / ENTREGAS (Prioridad 1: si dice "vendí", "vendido", "venta", "vta", "vnta", "entrega", etc.)
-    const isVentaDirecta = (
+    const isVentaDirecta = !lower.includes('comisionista') && (
         lower.includes('vendi') || lower.includes('vendido') || lower.includes('vendio') || lower.includes('vendieron') ||
         lower.includes('venta') || lower.includes('vnta') || lower.includes('vta') ||
-        lower.includes('entrego') || lower.includes('entrega') || lower.includes('entregado') ||
+        ((lower.includes('entrego') || lower.includes('entrega') || lower.includes('entregado')) && (hasIphone || hasImei)) ||
         lower.includes('stock propio')
     ) && (hasIphone || hasAmount || hasImei);
     const isReservaGremio = lower.includes('gremio') && hasIphone;
@@ -136,7 +184,7 @@ function classifyAndParse(text, senderName) {
 
         // 2. Extraer CLIENTE explícito (ej: "cliente MANU", "vendido a MANU")
         let cliente = 'Cliente Final';
-        const cliMatch = raw.match(/cliente\s*[:=]?\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+vendedor|\s+precio|\s+costo|\s+imei|\s+stock|\s+paga|\s+no pago|\n|$)/i) ||
+        const cliMatch = raw.match(/cliente\s*[:=]?\s*([a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+vendedor|\s+precio|\s+costo|\s+imei|\s+serial|\s+stock|\s+paga|\s+no pago|\n|$)/i) ||
                          raw.match(/vendido\s+a\s+([a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+?)(?:\s+en|\s+por|\s+u\$|\s+\$|\n|$)/i);
         if (cliMatch) {
             cliente = cliMatch[1].trim();
@@ -144,8 +192,8 @@ function classifyAndParse(text, senderName) {
 
         // 3. Extraer PRECIO DE VENTA explícito (evitando confundir con modelo como "14")
         let precioVenta = 0;
-        const precioMatch = raw.match(/precio\s*[:=]?\s*u?\$?\s*([0-9.,]+)/i) ||
-                            raw.match(/u\$?\s*([0-9]{3,4})(?!\s*gb)/i) ||
+        const precioMatch = raw.match(/(?:precio|venta)\s*[:=]?\s*(?:u\$|\$|usd)?\s*([0-9.,]+)/i) ||
+                            raw.match(/\bu\$?\s*([0-9]{3,4})(?!\s*gb)/i) ||
                             raw.match(/([0-9]{3,4})\s*(?:usd|dolares|dólares)/i);
         if (precioMatch) {
             precioVenta = parseFloat(precioMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
@@ -153,25 +201,25 @@ function classifyAndParse(text, senderName) {
 
         // 4. Extraer MODELO
         let modelo = '';
-        const modMatch = raw.match(/(?:venta|vendi\w*|vta|vnta)\s+(?:el\s+)?((?:iphone|iph|samsung|s\d{2}|redmi|moto|xiaomi)?[a-zA-Z0-9\s]+?)(?:\s+vendedor(?:a)?|\s+cliente|\s+precio|\s+costo|\s+imei|\s+stock|\s+paga|\s+no pago|\n|$)/i);
-        if (modMatch && modMatch[1].trim().length > 3) {
+        const modMatch = raw.match(/(?:venta|vendi\w*|vta|vnta)\s+(?:el\s+)?((?:iphone|iph|ps5|playstation|samsung|s\d{2}|redmi|moto|xiaomi)?[a-zA-Z0-9\s]+?)(?:\s+vendedor(?:a)?|\s+cliente|\s+precio|\s+costo|\s+imei|\s+serial|\s+stock|\s+paga|\s+no pago|\n|$)/i);
+        if (modMatch && modMatch[1].trim().length > 2) {
             modelo = modMatch[1].trim().toUpperCase();
         } else {
-            const iphMatch = raw.match(/((?:iph(?:one)?|1[1-8]|s\d{2})[\w\s]*(?:pro|plus|max|ultra)?(?:\s*\d{2,3}\s*gb)?(?:\s*[a-z]+)?)/i);
+            const iphMatch = raw.match(/((?:iph(?:one)?|1[1-8]|s\d{2}|ps5|playstation)[\w\s]*(?:pro|plus|max|ultra|digital)?(?:\s*\d{2,4}\s*gb)?(?:\s*[a-z]+)?)/i);
             if (iphMatch) modelo = iphMatch[1].trim().toUpperCase();
         }
 
         // 5. Extraer COSTO si viene
         let costo = 0;
         const costoMatch = raw.match(/pague\s+(\d{3,4})\s+a\s+([a-zA-Z]+)/i) ||
-                           raw.match(/comprado\s*a\s*[a-zA-ZáéíóúñÑ]+\s*u?\$?\s*([0-9.,]+)/i) ||
-                           raw.match(/costo\s*[:=]?\s*u?\$?\s*([0-9.,]+)/i);
+                           raw.match(/comprado\s*a\s*[a-zA-ZáéíóúñÑ]+\s*(?:u\$|\$|usd)?\s*([0-9.,]+)/i) ||
+                           raw.match(/costo\s*[:=]?\s*(?:u\$|\$|usd)?\s*([0-9.,]+)/i);
         if (costoMatch) {
             costo = parseFloat(costoMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
         }
 
         // 6. Detectar ESTADO DE COBRO (No pago / debe / fiado)
-        const noPago = lower.includes('no pago') || lower.includes('no pagó') || lower.includes('debe') || lower.includes('fiado') || lower.includes('cuenta corriente');
+        const noPago = lower.includes('no pago') || lower.includes('no paga') || lower.includes('no pagó') || lower.includes('debe') || lower.includes('fiado') || lower.includes('cuenta corriente');
         const precioNum = Number(precioVenta) || 0;
         const costoNum = Number(costo) || 0;
         const gananciaNum = precioNum - costoNum;
@@ -179,7 +227,8 @@ function classifyAndParse(text, senderName) {
         const estadoCobro = noPago ? 'DEBE' : (precioNum > 0 ? 'PAGADO' : 'CONSULTAR');
 
         const imeiMatch = raw.match(/\b\d{14,15}\b/);
-        const imei = imeiMatch ? imeiMatch[0] : '-';
+        const serialMatch = raw.match(/serial\s*[:=]?\s*([A-Za-z0-9\-]+)/i);
+        const imei = imeiMatch ? imeiMatch[0] : (serialMatch ? serialMatch[1].trim() : '-');
 
         let formaPago = noPago ? 'Fiado / Cuenta Corriente (No pagó)' : 'EFECTIVO USD';
         if (raw.toLowerCase().includes('tome') || raw.toLowerCase().includes('permuta')) {
@@ -249,7 +298,8 @@ function classifyAndParse(text, senderName) {
     }
 
     // 3. Cobros / Pagos de clientes
-    const isCobro = (lower.startsWith('pago ') || lower.includes(' pago ') || lower.includes('pago*') || (lower.includes('retira') && lower.includes('pago'))) && hasAmount;
+    const isCobro = !lower.includes('comisionista') && !lower.includes('no pago') && !lower.includes('no paga') && !lower.includes('no pagó') &&
+        (lower.startsWith('pago ') || lower.includes(' pago ') || lower.includes('pago*') || (lower.includes('retira') && lower.includes('pago'))) && hasAmount;
     if (isCobro) {
         let montoUsd = 0;
         let montoArs = 0;
@@ -257,8 +307,8 @@ function classifyAndParse(text, senderName) {
         const usdMatch = raw.match(/u\$?\s*([0-9.,]+)/i) || raw.match(/([0-9.,]+)\s*usd/i);
         if (usdMatch) montoUsd = parseFloat(usdMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
 
-        const arsMatch = raw.match(/\$\s*([0-9.,]+)/i);
-        if (arsMatch && (!usdMatch || raw.indexOf(arsMatch[0]) !== raw.indexOf(usdMatch[0]))) {
+        const arsMatch = raw.match(/(?<!u)\$\s*([0-9.,]+)/i);
+        if (arsMatch) {
             montoArs = parseFloat(arsMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
         }
 
