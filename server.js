@@ -450,6 +450,18 @@ app.get('/ping', (req, res) => {
     res.status(200).send('pong');
 });
 
+app.get('/restart', async (req, res) => {
+    try {
+        const authPath = path.join(process.cwd(), 'auth_info');
+        try { fs.rmSync(authPath, { recursive: true, force: true }); } catch (e) {}
+        await restoreSessionFromSheet(authPath);
+        startWhatsApp();
+        res.send('Reiniciando y sincronizando con Google Sheets...');
+    } catch (e) {
+        res.status(500).send('Error: ' + e.message);
+    }
+});
+
 app.get('/logs', (req, res) => {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.send(logBuffer.join('\n') || 'Aguardando logs...');
